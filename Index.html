@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8">
+  <title>Ptasie organy</title>
+  <style>
+    /* ======== GLOBAL STYLING ======== */
+    html, body {
+      margin: 0;
+      padding: 0;
+      font-family: "Helvetica Neue", Arial, sans-serif;
+      background: linear-gradient(145deg, #fbf7f2 0%, #f1e4df 100%);
+      color: #5c4033;
+      height: 100%;
+      overflow: hidden;
+    }
+
+    h1 {
+      text-align: center;
+      margin-top: 20px;
+      font-weight: normal;
+      font-size: 2em;  /* Slightly bigger for clarity */
+      letter-spacing: 0.04em;
+    }
+    p.subtitle {
+      text-align: center;
+      margin: 0 0 20px 0;
+      font-size: 1.1em;
+      color: #7d5f52;
+      letter-spacing: 0.03em;
+      max-width: 700px;
+      margin: 0 auto 20px auto;
+    }
+
+    #controls {
+      background: #fff8f4;
+      border: 1px solid #e9dcd2;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      width: 90%;
+      max-width: 700px;
+      margin: 0 auto 10px;
+      padding: 15px;
+    }
+    .control-row {
+      display: flex; 
+      align-items: center;
+      margin: 15px 0; /* More space between rows */
+    }
+    .control-row label {
+      width: 180px; 
+      font-weight: bold;
+      font-size: 1.1em;   /* Larger text */
+    }
+    .control-row input[type="range"] {
+      flex: 1;
+      margin: 0 15px;
+      cursor: pointer;
+      /* Make slider track thicker for mobile */
+      height: 24px;
+      -webkit-appearance: none;
+      background: #f1e4df;
+      border-radius: 12px;
+      outline: none;
+      border: 1px solid #e9dcd2;
+    }
+    .control-row input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 28px;
+      height: 28px;
+      background: #f7d7c4;
+      border-radius: 50%;
+      border: 1px solid #e9cbb7;
+    }
+    .control-row span {
+      width: 50px; 
+      text-align: right; 
+      display: inline-block;
+      font-size: 1.1em;
+    }
+
+    #startButton {
+      display: inline-block;
+      background-color: #f7d7c4;
+      border: 1px solid #e9cbb7;
+      border-radius: 6px;
+      padding: 14px 30px;
+      color: #5c4033;
+      font-size: 18px;
+      cursor: pointer;
+      margin: 0 auto 15px;
+      transition: background-color 0.2s;
+    }
+    #startButton:hover {
+      background-color: #f2cbb2;
+    }
+
+    #canvasContainer {
+      width: 100%;
+      text-align: center;
+    }
+    #flockCanvas {
+      background: #ffffffbb;
+      border: 1px solid #e9dcd2;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      margin: 0 auto;
+      max-width: 98%;
+    }
+  </style>
+</head>
+<body>
+
+<h1>Ptasie organy</h1>
+<p class="subtitle">
+  Każdy ptak fruwa niezależnie, ale stado może się przyciągać i wtedy wyłaniają się grupowe zachowania.
+  No i wszystkie grają na wirtualnych organach.
+</p>
+
+<div id="controls">
+  <div class="control-row">
+    <label for="numBirdsSlider">Liczba ptaków:</label>
+    <input type="range" id="numBirdsSlider" min="1" max="16" step="1" value="8">
+    <span id="numBirdsValue">8</span>
+  </div>
+  <div class="control-row">
+    <label for="attractionSlider">Siła przyciągania:</label>
+    <input type="range" id="attractionSlider" min="0" max="0.01" step="0.0001" value="0.003">
+    <span id="attractionValue">0.003</span>
+  </div>
+  <div class="control-row">
+    <label for="randomSlider">Losowość:</label>
+    <input type="range" id="randomSlider" min="0" max="1" step="0.01" value="0.3">
+    <span id="randomValue">0.3</span>
+  </div>
+  <div class="control-row">
+    <label for="speedSlider">Prędkość:</label>
+    <input type="range" id="speedSlider" min="0.1" max="5" step="0.1" value="1.8">
+    <span id="speedValue">1.8</span>
+  </div>
+</div>
+
+<button id="startButton">Uruchom dźwięk</button>
+
+<div id="canvasContainer">
+  <canvas id="flockCanvas" width="900" height="600"></canvas>
+</div>
+
+<script>
+/*
+  PTASIE ORGANY (Polish version, bigger UI)
+  -----------------------------------------
+  - Lydian scale from ~C2 to ~C7
+  - Multiple timbres (osc+filter combos)
+  - Global reverb
+  - x -> stereo pan, y -> discrete pitch
+  - Bounce off walls
+  - Sliders for number of birds, attraction, randomness, speed
+  - On click/touch: additional local pull
+  - Larger sliders & fonts for better mobile usage
+*/
+
+// ========== 1. GLOBALS ==========
+const canvas = document.getElementById('flockCanvas');
+const ctx = canvas.getContext('2d');
+const width = canvas.width;
+const height = canvas.height;
+
+let audioContext = null;
+let reverbNode = null;  // global convolver
+let birds = [];
+let animationId = null;
+
+let NUM_BIRDS = 8;
+let ATTRACTION_STRENGTH = 0.003;
+let RANDOMNESS = 0.3;
+let SPEED = 1.8;
+
+// Additional attraction point from user click
+let clickTarget = { x: null, y: null, active: false };
+
+// ========== 2. LYDIAN SCALE SETUP ==========
+const LYDIAN_INTERVALS = [0, 2, 4, 6, 7, 9, 11, 12];
+let lydianNotes = [];
+(function buildLydianScale() {
+  for (let midi = 36; midi <= 96; midi++) {
+    let semitoneFromC = (midi - 36) % 12;
+    if (LYDIAN_INTERVALS.includes(semitoneFromC)) {
+      lydianNotes.push(midi);
+    }
+  }
+})();
+function midiToFrequency(midi) {
+  return 440 * Math.pow(2, (midi - 69) / 12);
+}
+
+// ========== 3. INSTRUMENT CONFIGS ==========
+const instrumentConfigs = [
+  {
+    name: "SoftPad",
+    oscType: "sine",
+    filterType: "lowpass",
+    filterFreq: 1200,
+    attack: 1.0,
+    sustain: 0.2
+  },
+  {
+    name: "BrightPad",
+    oscType: "triangle",
+    filterType: "lowpass",
+    filterFreq: 2000,
+    attack: 0.8,
+    sustain: 0.25
+  },
+  {
+    name: "Bellish",
+    oscType: "sine",
+    filterType: "bandpass",
+    filterFreq: 1200,
+    attack: 0.01,
+    sustain: 0.3
+  },
+  {
+    name: "AiryFlute",
+    oscType: "sine",
+    filterType: "lowpass",
+    filterFreq: 1500,
+    attack: 0.2,
+    sustain: 0.15
+  },
+  {
+    name: "NasalSaw",
+    oscType: "sawtooth",
+    filterType: "bandpass",
+    filterFreq: 800,
+    attack: 0.05,
+    sustain: 0.25
+  },
+  {
+    name: "WarmSquare",
+    oscType: "square",
+    filterType: "lowpass",
+    filterFreq: 1000,
+    attack: 0.1,
+    sustain: 0.2
+  },
+  {
+    name: "Pluck",
+    oscType: "triangle",
+    filterType: "bandpass",
+    filterFreq: 800,
+    attack: 0.01,
+    sustain: 0.1
+  },
+  {
+    name: "ChimePad",
+    oscType: "triangle",
+    filterType: "highpass",
+    filterFreq: 300,
+    attack: 0.3,
+    sustain: 0.2
+  },
+];
+
+// ========== 4. BIRD CLASS ==========
+class Bird {
+  constructor(x, y, angle, color, instrument) {
+    this.x = x;
+    this.y = y;
+    this.angle = angle; 
+    this.color = color;
+    this.instrument = instrument;
+
+    this.oscillator = null;
+    this.filter = null;
+    this.gainNode = null;
+    this.panner = null;
+
+    this.currentMidi = null;
+    this.playing = false;
+  }
+
+  initAudioNodes(audioCtx) {
+    // Oscillator
+    this.oscillator = audioCtx.createOscillator();
+    this.oscillator.type = this.instrument.oscType;
+
+    // Filter
+    this.filter = audioCtx.createBiquadFilter();
+    this.filter.type = this.instrument.filterType;
+    this.filter.frequency.value = this.instrument.filterFreq;
+
+    // Gain
+    this.gainNode = audioCtx.createGain();
+    this.gainNode.gain.value = 0.0;
+
+    // Panner
+    this.panner = audioCtx.createStereoPanner();
+
+    // Connect chain: osc -> filter -> gain -> panner -> reverb -> destination
+    this.oscillator.connect(this.filter)
+                   .connect(this.gainNode)
+                   .connect(this.panner)
+                   .connect(reverbNode)
+                   .connect(audioCtx.destination);
+
+    // Start oscillator
+    this.oscillator.start();
+    this.playing = true;
+  }
+
+  update(birds) {
+    let vx = Math.cos(this.angle);
+    let vy = Math.sin(this.angle);
+
+    // Randomness
+    vx += (Math.random() - 0.5) * RANDOMNESS;
+    vy += (Math.random() - 0.5) * RANDOMNESS;
+
+    // Attract to center
+    let center = computeCenterOfMass(birds);
+    let dx = center.x - this.x;
+    let dy = center.y - this.y;
+    vx += dx * ATTRACTION_STRENGTH;
+    vy += dy * ATTRACTION_STRENGTH;
+
+    // Attract to user click
+    if (clickTarget.active && clickTarget.x !== null && clickTarget.y !== null) {
+      let cdx = clickTarget.x - this.x;
+      let cdy = clickTarget.y - this.y;
+      vx += cdx * (ATTRACTION_STRENGTH * 3);
+      vy += cdy * (ATTRACTION_STRENGTH * 3);
+    }
+
+    // Convert back to angle, keep speed
+    this.angle = Math.atan2(vy, vx);
+
+    // Move
+    this.x += Math.cos(this.angle) * SPEED;
+    this.y += Math.sin(this.angle) * SPEED;
+
+    // Bounce
+    if (this.x < 0) {
+      this.x = 0;
+      this.angle = Math.PI - this.angle;
+    }
+    if (this.x > width) {
+      this.x = width;
+      this.angle = Math.PI - this.angle;
+    }
+    if (this.y < 0) {
+      this.y = 0;
+      this.angle = -this.angle;
+    }
+    if (this.y > height) {
+      this.y = height;
+      this.angle = -this.angle;
+    }
+  }
+
+  updateAudio() {
+    if (!this.playing || !this.oscillator || !this.gainNode) return;
+
+    // 1. Map y -> discrete Lydian pitch
+    let fracY = this.y / height;
+    let idx = Math.floor(fracY * (lydianNotes.length - 1));
+    if (idx < 0) idx = 0;
+    if (idx >= lydianNotes.length) idx = lydianNotes.length - 1;
+    let midi = lydianNotes[idx];
+
+    if (midi !== this.currentMidi) {
+      this.currentMidi = midi;
+      let freq = midiToFrequency(midi);
+      this.oscillator.frequency.setValueAtTime(freq, audioContext.currentTime);
+    }
+
+    // 2. Panning from x
+    let fracX = this.x / width;
+    let panVal = fracX * 2 - 1; 
+    this.panner.pan.setValueAtTime(panVal, audioContext.currentTime);
+
+    // 3. Dynamic filter freq
+    let baseF = this.instrument.filterFreq;
+    let mul = (this.currentMidi - 36) / (96 - 36);
+    let dynamicCutoff = baseF + baseF * mul;
+    this.filter.frequency.setValueAtTime(dynamicCutoff, audioContext.currentTime);
+
+    // 4. Envelope (Attack -> Sustain)
+    let now = audioContext.currentTime;
+    let atk = this.instrument.attack || 0.2;
+    let sus = this.instrument.sustain || 0.2;
+    let currentGain = this.gainNode.gain.value;
+
+    this.gainNode.gain.cancelScheduledValues(now);
+    this.gainNode.gain.setValueAtTime(currentGain, now);
+    this.gainNode.gain.linearRampToValueAtTime(sus, now + atk);
+  }
+
+  draw() {
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, 8, 0, 2*Math.PI);
+    ctx.fillStyle = this.color;
+    ctx.fill();
+  }
+}
+
+// ========== UTILS ==========
+function computeCenterOfMass(birds) {
+  let sumX = 0, sumY = 0;
+  for (let b of birds) {
+    sumX += b.x;
+    sumY += b.y;
+  }
+  return { 
+    x: sumX / birds.length, 
+    y: sumY / birds.length 
+  };
+}
+
+function getRandomPastel() {
+  const hue = Math.floor(Math.random() * 360);
+  return `hsl(${hue}, 70%, 80%)`;
+}
+
+// ========== INIT BIRDS ==========
+function initBirds() {
+  if (birds.length > 0) {
+    birds.forEach(b => {
+      if (b.oscillator) {
+        try { b.oscillator.stop(); } catch(e){}
+      }
+    });
+    birds = [];
+  }
+
+  for (let i = 0; i < NUM_BIRDS; i++) {
+    let x = Math.random() * width;
+    let y = Math.random() * height;
+    let angle = Math.random() * 2 * Math.PI;
+    let color = getRandomPastel();
+
+    let instIndex = i % instrumentConfigs.length;
+    let inst = instrumentConfigs[instIndex];
+
+    let bird = new Bird(x, y, angle, color, inst);
+    birds.push(bird);
+
+    if (audioContext && reverbNode) {
+      bird.initAudioNodes(audioContext);
+    }
+  }
+}
+
+// ========== ANIMATION ==========
+function animate() {
+  ctx.clearRect(0, 0, width, height);
+
+  for (let b of birds) {
+    b.update(birds);
+    b.draw();
+    b.updateAudio();
+  }
+  animationId = requestAnimationFrame(animate);
+}
+
+// ========== REVERB ==========
+function createReverbNode(audioCtx) {
+  let convolver = audioCtx.createConvolver();
+  let length = audioCtx.sampleRate * 2.5; // ~2.5s tail
+  let impulse = audioCtx.createBuffer(2, length, audioCtx.sampleRate);
+  for (let c = 0; c < 2; c++) {
+    let channelData = impulse.getChannelData(c);
+    for (let i = 0; i < length; i++) {
+      channelData[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / length, 4);
+    }
+  }
+  convolver.buffer = impulse;
+  return convolver;
+}
+
+// ========== START AUDIO ==========
+function startAudio() {
+  if (!audioContext) {
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (!reverbNode) {
+    reverbNode = createReverbNode(audioContext);
+  }
+  birds.forEach(b => b.initAudioNodes(audioContext));
+
+  if (!animationId) {
+    animate();
+  }
+}
+
+// ========== MOUSE/TAP EVENTS ==========
+canvas.addEventListener('mousedown', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+  clickTarget.x = mx;
+  clickTarget.y = my;
+  clickTarget.active = true;
+});
+canvas.addEventListener('mouseup', () => {
+  clickTarget.active = false;
+});
+canvas.addEventListener('mousemove', (e) => {
+  if (clickTarget.active) {
+    const rect = canvas.getBoundingClientRect();
+    clickTarget.x = e.clientX - rect.left;
+    clickTarget.y = e.clientY - rect.top;
+  }
+});
+
+canvas.addEventListener('touchstart', (e) => {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const touch = e.touches[0];
+  clickTarget.x = touch.clientX - rect.left;
+  clickTarget.y = touch.clientY - rect.top;
+  clickTarget.active = true;
+}, {passive: false});
+canvas.addEventListener('touchend', () => {
+  clickTarget.active = false;
+});
+canvas.addEventListener('touchmove', (e) => {
+  e.preventDefault();
+  if (clickTarget.active) {
+    const rect = canvas.getBoundingClientRect();
+    const touch = e.touches[0];
+    clickTarget.x = touch.clientX - rect.left;
+    clickTarget.y = touch.clientY - rect.top;
+  }
+}, {passive: false});
+
+// ========== SLIDERS & BUTTON ==========
+const numBirdsSlider = document.getElementById("numBirdsSlider");
+const numBirdsValue = document.getElementById("numBirdsValue");
+numBirdsSlider.addEventListener('input', () => {
+  NUM_BIRDS = parseInt(numBirdsSlider.value);
+  numBirdsValue.textContent = NUM_BIRDS;
+  initBirds();
+});
+
+const attractionSlider = document.getElementById("attractionSlider");
+const attractionValue = document.getElementById("attractionValue");
+attractionSlider.addEventListener('input', () => {
+  ATTRACTION_STRENGTH = parseFloat(attractionSlider.value);
+  attractionValue.textContent = ATTRACTION_STRENGTH.toFixed(4);
+});
+
+const randomSlider = document.getElementById("randomSlider");
+const randomValue = document.getElementById("randomValue");
+randomSlider.addEventListener('input', () => {
+  RANDOMNESS = parseFloat(randomSlider.value);
+  randomValue.textContent = RANDOMNESS.toFixed(2);
+});
+
+const speedSlider = document.getElementById("speedSlider");
+const speedValue = document.getElementById("speedValue");
+speedSlider.addEventListener('input', () => {
+  SPEED = parseFloat(speedSlider.value);
+  speedValue.textContent = SPEED.toFixed(1);
+});
+
+document.getElementById("startButton").addEventListener('click', () => {
+  document.getElementById("startButton").style.display = 'none';
+  startAudio();
+});
+
+// ========== ON LOAD ==========
+initBirds();
+</script>
+</body>
+</html>
